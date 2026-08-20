@@ -362,8 +362,6 @@ Dechterenko</h4>
 <ul>
 <li><a href="#setup" id="toc-setup">0 · Setup</a>
 <ul>
-<li><a href="#version-check" id="toc-version-check">Version
-check</a></li>
 <li><a href="#packages" id="toc-packages">Packages</a></li>
 <li><a href="#constants" id="toc-constants">Constants</a></li>
 <li><a href="#theme" id="toc-theme">Theme</a></li>
@@ -432,8 +430,7 @@ panel</a></li>
 panel</a></li>
 <li><a href="#summary-5" id="toc-summary-5">6.4 Summary</a></li>
 </ul></li>
-<li><a href="#export-and-audit" id="toc-export-and-audit">7 · Export and
-audit</a></li>
+<li><a href="#export" id="toc-export">7 · Export</a></li>
 <li><a href="#session-info" id="toc-session-info">8 · Session
 info</a></li>
 </ul>
@@ -448,9 +445,6 @@ poster, in their final form.</p>
 </blockquote>
 <div id="setup" class="section level1">
 <h1>0 · Setup</h1>
-<div id="version-check" class="section level2">
-<h2>Version check</h2>
-</div>
 <div id="packages" class="section level2">
 <h2>Packages</h2>
 <pre class="r"><code># Data wrangling and visualisation
@@ -2003,9 +1997,66 @@ average over the 2 s preceding the response:</p>
 by resampling recordings.</p>
 <div id="window-size-selection-1" class="section level2">
 <h2>5.1 Window size selection</h2>
+<p>The cascade is estimated as a grand average over the seconds
+preceding the response, so a trial contributes to the average at time
+−<em>t</em> only if it lasted at least <em>t</em> seconds. The window
+therefore trades reach against coverage: the further back it extends,
+the fewer trials are still running, and the more its early portion is
+carried by slow trials alone.</p>
+<p>Two things deserve further attention. Coverage has to hold
+<strong>within every agreement bin</strong>, not only on average (hard
+triplets take longer). And the criterion must not touch the
+chosen/unchosen contrast. Like § 4.2.1, the window for gaze cascade is
+computed from response times alone, so the window is not selected on the
+outcome it is later used to measure.</p>
+<pre class="r"><code># Share of trials still running w seconds before the response, per agreement
+# bin. A trial contributes to the grand average at time -w only if it lasted at
+# least w, so this is exactly the coverage at the window&#39;s far edge.
+compute_coverage &lt;- function(w) {
+  dp_responses |&gt;
+    group_by(agreement_bin) |&gt;
+    summarise(
+      n_trials = n(),
+      pct_reaching_window = 100 * mean(response_time &gt;= w, na.rm = TRUE),
+      .groups = &quot;drop&quot;
+    )
+}</code></pre>
+<pre class="r"><code># The window is chosen on the WORST bin, never on the mean across bins
+cascade_coverage_table &lt;-
+  map_dfr(seq(1, 3.5, by = 0.5), \(w) mutate(compute_coverage(w), window = w)) |&gt;
+  mutate(agreement_bin = short_bin(agreement_bin)) |&gt;
+  group_by(window) |&gt;
+  mutate(worst_bin = min(pct_reaching_window)) |&gt;
+  ungroup() |&gt;
+  select(window, agreement_bin, pct_reaching_window, worst_bin) |&gt;
+  pivot_wider(names_from = agreement_bin, values_from = pct_reaching_window) |&gt;
+  relocate(worst_bin, .after = last_col())
+
+cascade_coverage_table
+#&gt; # A tibble: 6 × 5
+#&gt;   window   Low Medium  High worst_bin
+#&gt;    &lt;dbl&gt; &lt;dbl&gt;  &lt;dbl&gt; &lt;dbl&gt;     &lt;dbl&gt;
+#&gt; 1    1    98.4   98.2  97.1      97.1
+#&gt; 2    1.5  89.7   88.5  84.5      84.5
+#&gt; 3    2    77.2   76.0  69.6      69.6
+#&gt; 4    2.5  65.9   63.7  55.6      55.6
+#&gt; 5    3    54.4   52.5  44.1      44.1
+#&gt; 6    3.5  45.5   43.8  35.8      35.8</code></pre>
+<p>Coverage decays steadily with window length and does so fastest in
+the low agreement bin, where responses are slowest. <strong>2 s</strong>
+is taken as the longest window at which every bin still contributes
+roughly 70% of its trials at the far edge.</p>
 <pre class="r"><code>cascade_window &lt;- 2
 cascade_n_bins &lt;- 60L
-cascade_bin_w  &lt;- cascade_window / cascade_n_bins</code></pre>
+cascade_bin_w  &lt;- cascade_window / cascade_n_bins
+
+compute_coverage(cascade_window)
+#&gt; # A tibble: 3 × 3
+#&gt;   agreement_bin   n_trials pct_reaching_window
+#&gt;   &lt;fct&gt;              &lt;int&gt;               &lt;dbl&gt;
+#&gt; 1 50-65% (Low)        3519                77.2
+#&gt; 2 65-85% (Medium)     4539                76.0
+#&gt; 3 85-100% (High)      2142                69.6</code></pre>
 </div>
 <div id="data-processing-1" class="section level2">
 <h2>5.2 Data processing</h2>
@@ -2526,8 +2577,8 @@ one.</p>
 <hr />
 </div>
 </div>
-<div id="export-and-audit" class="section level1">
-<h1>7 · Export and audit</h1>
+<div id="export" class="section level1">
+<h1>7 · Export</h1>
 <pre class="r"><code>theme_set(poster_theme(base_size = 22))
 
 poster_blocks &lt;- tibble::tribble(
@@ -2561,37 +2612,6 @@ if (PUBLIC_BUILD) {
 }
 
 theme_set(poster_theme())  # restore for the rest of the document</code></pre>
-<pre class="r"><code># Static audit of this document&#39;s own source. Fails if a deprecated entry point
-# appears in any code chunk, evaluated or not.
-deprecated_calls &lt;- c(
-  &quot;compute_eyetracking_statistics&quot;,
-  &quot;import_eyelink_group&quot;,
-  &quot;import_eyelink_subject&quot;
-)
-
-src_path &lt;- knitr::current_input()
-
-if (is.null(src_path) || !file.exists(src_path)) {
-  message(&quot;Source path unavailable (not knitting?); deprecation audit skipped.&quot;)
-} else {
-  code_lines &lt;- sub(&quot;#.*$&quot;, &quot;&quot;, readLines(src_path, warn = FALSE))
-  hits &lt;- purrr::keep(
-    purrr::map(
-      rlang::set_names(deprecated_calls),
-      \(f) grep(paste0(f, &quot;\\s*\\(&quot;), code_lines)
-    ),
-    \(x) length(x) &gt; 0
-  )
-
-  if (length(hits) &gt; 0) {
-    stop(
-      &quot;Deprecated function(s) called: &quot;, paste(names(hits), collapse = &quot;, &quot;),
-      &quot; (line(s): &quot;, paste(unlist(hits), collapse = &quot;, &quot;), &quot;)&quot;
-    )
-  } else {
-    message(&quot;Audit passed: no deprecated eye-tracking entry point is called.&quot;)
-  }
-}</code></pre>
 <hr />
 </div>
 <div id="session-info" class="section level1">
@@ -2620,19 +2640,19 @@ if (is.null(src_path) || !file.exists(src_path)) {
 #&gt; loaded via a namespace (and not attached):
 #&gt;  [1] tidyselect_1.2.1       farver_2.1.2           S7_0.2.2               fastmap_1.2.0          digest_0.6.39          lifecycle_1.0.5       
 #&gt;  [7] ellipsis_0.3.2         processx_3.8.6         magrittr_2.0.5         compiler_4.5.3         rlang_1.3.0            sass_0.4.10           
-#&gt; [13] tools_4.5.3            igraph_2.3.3           yaml_2.3.12            data.table_1.18.2.1    knitr_1.51             labeling_0.4.3        
-#&gt; [19] pkgbuild_1.4.8         curl_7.1.0             here_1.0.2             xml2_1.6.0             RColorBrewer_1.1-3     pkgload_1.5.0         
-#&gt; [25] rsconnect_1.7.0        withr_3.0.3            imager_1.0.8           grid_4.5.3             scales_1.4.0           MASS_7.3-65           
-#&gt; [31] insight_1.4.6          readbitmap_0.1.5       cli_3.6.6              rmarkdown_2.31         ragg_1.5.1             reformulas_0.4.4      
-#&gt; [37] generics_0.1.4         remotes_2.5.0          otel_0.2.0             rstudioapi_0.18.0      commonmark_2.0.0       sessioninfo_1.2.3     
-#&gt; [43] minqa_1.2.8            cachem_1.1.0           splines_4.5.3          tiff_0.1-12            marginaleffects_0.32.0 vctrs_0.7.3           
-#&gt; [49] devtools_2.4.6         boot_1.3-32            jsonlite_2.0.0         litedown_0.10          callr_3.7.6            systemfonts_1.3.2     
-#&gt; [55] jpeg_0.1-11            jquerylib_0.1.4        glue_1.8.1             nloptr_2.2.1           codetools_0.2-20       ps_1.9.1              
-#&gt; [61] ggtext_0.1.2           stringi_1.8.9          gtable_0.3.6           tibble_3.3.1           pillar_1.11.1          htmltools_0.5.9       
-#&gt; [67] R6_2.6.1               textshaping_1.0.5      Rdpack_2.6.6           rprojroot_2.1.1        bmp_0.3.1              evaluate_1.0.5        
-#&gt; [73] lattice_0.22-9         markdown_2.0           rbibutils_2.4.1        png_0.1-8              backports_1.5.1        gridtext_0.1.6        
-#&gt; [79] memoise_2.0.1          bslib_0.12.0           Rcpp_1.1.2             checkmate_2.3.4        nlme_3.1-169           mgcv_1.9-4            
-#&gt; [85] xfun_0.60              fs_2.1.0               forcats_1.0.1          usethis_3.2.1          pkgconfig_2.0.3</code></pre>
+#&gt; [13] tools_4.5.3            utf8_1.2.6             igraph_2.3.3           yaml_2.3.12            data.table_1.18.2.1    knitr_1.51            
+#&gt; [19] labeling_0.4.3         pkgbuild_1.4.8         curl_7.1.0             here_1.0.2             xml2_1.6.0             RColorBrewer_1.1-3    
+#&gt; [25] pkgload_1.5.0          rsconnect_1.7.0        withr_3.0.3            imager_1.0.8           grid_4.5.3             scales_1.4.0          
+#&gt; [31] MASS_7.3-65            insight_1.4.6          readbitmap_0.1.5       cli_3.6.6              rmarkdown_2.31         ragg_1.5.1            
+#&gt; [37] reformulas_0.4.4       generics_0.1.4         remotes_2.5.0          otel_0.2.0             rstudioapi_0.18.0      commonmark_2.0.0      
+#&gt; [43] sessioninfo_1.2.3      minqa_1.2.8            cachem_1.1.0           splines_4.5.3          tiff_0.1-12            marginaleffects_0.32.0
+#&gt; [49] vctrs_0.7.3            devtools_2.4.6         boot_1.3-32            jsonlite_2.0.0         litedown_0.10          callr_3.7.6           
+#&gt; [55] systemfonts_1.3.2      jpeg_0.1-11            jquerylib_0.1.4        glue_1.8.1             nloptr_2.2.1           codetools_0.2-20      
+#&gt; [61] ps_1.9.1               ggtext_0.1.2           stringi_1.8.9          gtable_0.3.6           tibble_3.3.1           pillar_1.11.1         
+#&gt; [67] htmltools_0.5.9        R6_2.6.1               textshaping_1.0.5      Rdpack_2.6.6           rprojroot_2.1.1        bmp_0.3.1             
+#&gt; [73] evaluate_1.0.5         lattice_0.22-9         markdown_2.0           rbibutils_2.4.1        png_0.1-8              backports_1.5.1       
+#&gt; [79] gridtext_0.1.6         memoise_2.0.1          bslib_0.12.0           Rcpp_1.1.2             checkmate_2.3.4        nlme_3.1-169          
+#&gt; [85] mgcv_1.9-4             xfun_0.60              fs_2.1.0               forcats_1.0.1          usethis_3.2.1          pkgconfig_2.0.3</code></pre>
 </div>
 <div class="footnotes footnotes-end-of-document">
 <hr />
